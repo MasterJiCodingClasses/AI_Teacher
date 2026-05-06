@@ -6,6 +6,7 @@ from PyPDF2 import PdfReader
 import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
+from bs4 import BeautifulSoup
 
 try:
     OCR_AVAILABLE = True
@@ -52,14 +53,18 @@ def ocr_image_file(filepath):
     if not OCR_AVAILABLE:
         print(f"  [OCR unavailable] Skipping image: {filepath}")
         return ""
+
     try:
         img = Image.open(filepath)
-        text = pytesseract.image_to_string(img)
+        img = img.convert("L")
+        img = ImageOps.autocontrast(img)
+        img = img.point(lambda x: 0 if x < 150 else 255)
+        text = pytesseract.image_to_string(img, config="--psm 7")
         return text.strip()
+
     except Exception as e:
         print(f"  [OCR error] {filepath}: {e}")
         return ""
-
 
 def ocr_pdf_page(page_image):
     if not OCR_AVAILABLE:
@@ -90,7 +95,6 @@ def extract_pdf_text(filepath, filename):
             if text.strip():
                 result += page_label + text
             elif pdf_images and page_num < len(pdf_images):
-                # No text extracted — attempt OCR on the rendered page image
                 print(f"  [OCR] Page {page_num + 1} of '{filename}' has no selectable text, running OCR...")
                 ocr_text = ocr_pdf_page(pdf_images[page_num])
                 if ocr_text:
@@ -107,6 +111,8 @@ def extract_pdf_text(filepath, filename):
 
 
 def load_knowledge():
+    import os
+    import json
     knowledge_text = ""
 
     if not os.path.exists(KNOWLEDGE_FOLDER):
@@ -123,9 +129,26 @@ def load_knowledge():
         header = f"\n\n===== FILE: {filename} =====\n"
 
         try:
-            if ext == ".txt":
-                with open(filepath, "r", encoding="utf-8") as f:
+            if ext in [".txt", ".md", ".log"]:
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                     knowledge_text += header + f.read()
+
+            elif ext == ".json":
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    knowledge_text += header + json.dumps(data, indent=2)
+
+            elif ext == ".csv":
+                import pandas as pd
+                df = pd.read_csv(filepath)
+                knowledge_text += header + df.to_string()
+
+            elif ext in [".html", ".htm", ".xml"]:
+                from bs4 import BeautifulSoup
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                    soup = BeautifulSoup(f, "html.parser")
+                    knowledge_text += header + soup.get_text()
+
 
             elif ext == ".pdf":
                 print(f"Loading PDF: {filename}")
@@ -139,13 +162,20 @@ def load_knowledge():
                 else:
                     knowledge_text += header + "[No text found after OCR]\n"
 
+            else:
+                try:
+                    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                        knowledge_text += header + f.read()
+                except:
+                    knowledge_text += header + "[Unsupported file type]\n"
+
         except Exception as e:
             print(f"Error reading {filename}: {e}")
 
     return knowledge_text
 
-
 knowledge_text = load_knowledge()
+
 
 print("\n--- Loaded Knowledge Files ---")
 for filename in sorted(os.listdir(KNOWLEDGE_FOLDER)) if os.path.exists(KNOWLEDGE_FOLDER) else []:
